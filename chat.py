@@ -110,7 +110,7 @@ def is_personal_fact(text):
         print(f"Error in is_personal_fact: {e}")
         return False, ""
 
-MONGO_URI = "mongodb://127.0.0.1:27017/Moktashef-DEV"
+MONGO_URI = "mongodb://localhost:27017/Moktashef-DEV"
 JWT_SECRET = os.getenv("JWT_SECRET", "super-secret-key")
 API_KEY = os.getenv("API_KEY")
 MODEL = os.getenv("MODEL")
@@ -124,7 +124,7 @@ if not os.path.exists(UPLOAD_FOLDER):
     os.makedirs(UPLOAD_FOLDER)
 
 app = Flask(__name__)
-CORS(app, origins=["http://localhost:5173"])
+CORS(app, supports_credentials=True)
 app.config["MONGO_URI"] = MONGO_URI
 app.config["JWT_SECRET_KEY"] = "jvmmvsjmqncfb19221"
 app.config["JWT_IDENTITY_CLAIM"] = "id"
@@ -177,36 +177,46 @@ def groq_api_call(messages, model=None, temperature=0.6, stream=True):
 @app.route('/conversations/new', methods=['POST'])
 @jwt_required()
 def create_conversation():
-    user_id = get_jwt_identity()
-    claims = get_jwt()
-    user = mongo.db.users.find_one({"_id": ObjectId(user_id)})
-    if not user:
-        return jsonify({"msg": "User not found."}), 404
-    
-    data = request.json
-    title = data.get('title', 'New Conversation')
-    
-    # Create a new conversation with proper ISO format dates
-    current_time = datetime.utcnow().isoformat() + "Z"
-    new_conversation = {
-        "id": str(ObjectId()),
-        "title": title,
-        "created_at": current_time,
-        "updated_at": current_time,
-        "messages": []
-    }
-    
-    # Add to user's conversations
-    conversations = user.get('conversations', [])
-    conversations.append(new_conversation)
-    
-    # Update user document
-    mongo.db.users.update_one(
-        {"_id": ObjectId(user_id)},
-        {"$set": {"conversations": conversations}}
-    )
-    
-    return jsonify({"conversation": new_conversation}), 201
+    try:
+        user_id = get_jwt_identity()
+        user = mongo.db.users.find_one({"_id": ObjectId(user_id)})
+        if not user:
+            return jsonify({"msg": "User not found."}), 404
+        
+        data = request.json
+        title = data.get('title', 'New Conversation')
+        
+        # Create a new conversation with proper ISO format dates
+        current_time = datetime.utcnow().isoformat() + "Z"
+        new_conversation = {
+            "id": str(ObjectId()),
+            "title": title,
+            "created_at": current_time,
+            "updated_at": current_time,
+            "messages": []
+        }
+        
+        # Initialize conversations array if it doesn't exist
+        if 'conversations' not in user:
+            result = mongo.db.users.update_one(
+                {"_id": ObjectId(user_id)},
+                {"$set": {"conversations": [new_conversation]}}
+            )
+        else:
+            # Add to existing conversations array
+            result = mongo.db.users.update_one(
+                {"_id": ObjectId(user_id)},
+                {"$push": {"conversations": new_conversation}}
+            )
+        
+        if result.modified_count == 0:
+            return jsonify({"msg": "Failed to create conversation."}), 500
+            
+        return jsonify({"conversation": new_conversation}), 201
+        
+    except Exception as e:
+        print(f"Error creating conversation: {str(e)}")
+        return jsonify({"msg": "Internal server error."}), 500
 
 @app.route('/conversations', methods=['GET'])
 @jwt_required()
@@ -968,66 +978,66 @@ def chat(conversation_id):
 
 
 # --- Legacy Endpoint (Unchanged Logic, Still Points to Updated Chat) ---
-@app.route('/chat', methods=['POST'])
-@jwt_required()
-def legacy_chat():
-    user_id = get_jwt_identity()
-    user = mongo.db.users.find_one({"_id": ObjectId(user_id)})
-    if not user:
-        return jsonify({"msg": "User not found."}), 404
+# @app.route('/chat', methods=['POST'])
+# @jwt_required()
+# def legacy_chat():
+#     user_id = get_jwt_identity()
+#     user = mongo.db.users.find_one({"_id": ObjectId(user_id)})
+#     if not user:
+#         return jsonify({"msg": "User not found."}), 404
 
-    # Create a new conversation if user doesn't have any
-    conversations = user.get('conversations', [])
-    if not conversations:
-        current_time = datetime.utcnow().isoformat() + "Z"
-        new_conversation = {
-            "id": str(ObjectId()),
-            "title": "New Conversation",
-            "created_at": current_time,
-            "updated_at": current_time,
-            "messages": []
-        }
-        conversations.append(new_conversation)
-        mongo.db.users.update_one(
-            {"_id": ObjectId(user_id)},
-            {"$set": {"conversations": conversations}}
-        )
-        conversation_id = new_conversation["id"]
-    else:
-        # Use the most recent conversation
-        conversation_id = conversations[-1]["id"]
+#     # Create a new conversation if user doesn't have any
+#     conversations = user.get('conversations', [])
+#     if not conversations:
+#         current_time = datetime.utcnow().isoformat() + "Z"
+#         new_conversation = {
+#             "id": str(ObjectId()),
+#             "title": "New Conversation",
+#             "created_at": current_time,
+#             "updated_at": current_time,
+#             "messages": []
+#         }
+#         conversations.append(new_conversation)
+#         mongo.db.users.update_one(
+#             {"_id": ObjectId(user_id)},
+#             {"$set": {"conversations": conversations}}
+#         )
+#         conversation_id = new_conversation["id"]
+#     else:
+#         # Use the most recent conversation
+#         conversation_id = conversations[-1]["id"]
 
-    # Store original request data
-    original_data = request.get_json()
+#     # Store original request data
+#     original_data = request.get_json()
     
-    # Check for personal facts before forwarding
-    message = original_data.get('message', '').strip()
-    if message:
-        contains_fact, extracted_fact = is_personal_fact(message)
-        if contains_fact:
-            conversation = next((conv for conv in conversations if conv["id"] == conversation_id), None)
-            conversation_title = conversation.get('title', 'Untitled Conversation') if conversation else "New Conversation"
+#     # Check for personal facts before forwarding
+#     message = original_data.get('message', '').strip()
+#     if message:
+#         contains_fact, extracted_fact = is_personal_fact(message)
+#         if contains_fact:
+#             conversation = next((conv for conv in conversations if conv["id"] == conversation_id), None)
+#             conversation_title = conversation.get('title', 'Untitled Conversation') if conversation else "New Conversation"
             
-            # Store the personal fact
-            print(f"DEBUG LEGACY: Storing personal fact: {extracted_fact}")
-            store_user_memory(
-                user_id, 
-                extracted_fact,
-                conversation_id=conversation_id,
-                conversation_title=conversation_title,
-                mem_type="fact",
-                is_factual=True,
-                importance=0.8,
-                topic="cybersecurity"
-            )
+#             # Store the personal fact
+#             print(f"DEBUG LEGACY: Storing personal fact: {extracted_fact}")
+#             store_user_memory(
+#                 user_id, 
+#                 extracted_fact,
+#                 conversation_id=conversation_id,
+#                 conversation_title=conversation_title,
+#                 mem_type="fact",
+#                 is_factual=True,
+#                 importance=0.8,
+#                 topic="cybersecurity"
+#             )
     
-    # Create a modified request that preserves file_id
-    if hasattr(request, '_cached_data'):
-        delattr(request, '_cached_data')
-    request._cached_data = original_data
+#     # Create a modified request that preserves file_id
+#     if hasattr(request, '_cached_data'):
+#         delattr(request, '_cached_data')
+#     request._cached_data = original_data
     
-    # Forward to the updated chat endpoint
-    return chat(conversation_id)
+#     # Forward to the updated chat endpoint
+#     return chat(conversation_id)
 
 def allowed_file(filename):
     return '.' in filename and \

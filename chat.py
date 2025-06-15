@@ -124,7 +124,16 @@ if not os.path.exists(UPLOAD_FOLDER):
     os.makedirs(UPLOAD_FOLDER)
 
 app = Flask(__name__)
-CORS(app, supports_credentials=True)
+
+# Configure CORS properly for frontend
+CORS(app, 
+     origins=["http://localhost:3000", "http://localhost:5173", "http://localhost:5174", "http://127.0.0.1:3000", "http://127.0.0.1:5173", "http://127.0.0.1:5174"],
+     supports_credentials=True,
+     allow_headers=["Content-Type", "Authorization", "accesstoken", "X-Request-With", "Accept", "Origin"],
+     methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+     expose_headers=["Content-Type", "X-Web-Search-Used"]
+)
+
 app.config["MONGO_URI"] = MONGO_URI
 app.config["JWT_SECRET_KEY"] = "jvmmvsjmqncfb19221"
 app.config["JWT_IDENTITY_CLAIM"] = "id"
@@ -1897,6 +1906,86 @@ def qa_over_summary(file_content, user_query, llm_api_func, max_chars=2000, mode
     )
     return llm_api_func(prompt, model=model)
 
+# --- Authentication Routes ---
+
+@app.route('/user/getProfile', methods=['GET'])
+@jwt_required()
+def get_profile():
+    try:
+        user_id = get_jwt_identity()
+        user = mongo.db.users.find_one({"_id": ObjectId(user_id)})
+        
+        if not user:
+            return jsonify({"success": False, "message": "User not found"}), 404
+        
+        return jsonify({
+            "success": True,
+            "data": {
+                "id": str(user['_id']),
+                "email": user['email'],
+                "firstName": user.get('firstName', ''),
+                "lastName": user.get('lastName', ''),
+                "userImg": user.get('userImg', {}),
+                "created_at": user.get('created_at', '')
+            }
+        }), 200
+        
+    except Exception as e:
+        return jsonify({"success": False, "message": f"Failed to get profile: {str(e)}"}), 500
+
+@app.route('/scan', methods=['POST'])
+@jwt_required()
+def scan_website():
+    try:
+        user_id = get_jwt_identity()
+        data = request.json
+        url = data.get('url')
+        
+        if not url:
+            return jsonify({"message": "URL is required"}), 400
+        
+        # Here you would implement your actual scanning logic
+        # For now, returning a mock response
+        mock_vulnerabilities = [
+            {
+                "id": 1,
+                "title": "SQL Injection",
+                "severity": "High",
+                "description": "Potential SQL injection vulnerability found",
+                "url": url,
+                "method": "POST",
+                "parameter": "id"
+            },
+            {
+                "id": 2,
+                "title": "XSS Vulnerability",
+                "severity": "Medium",
+                "description": "Cross-site scripting vulnerability detected",
+                "url": url,
+                "method": "GET",
+                "parameter": "search"
+            }
+        ]
+        
+        return jsonify({
+            "success": True,
+            "vulnerabilities": mock_vulnerabilities,
+            "scan_date": datetime.utcnow().isoformat() + "Z",
+            "target_url": url
+        }), 200
+        
+    except Exception as e:
+        return jsonify({"message": f"Scan failed: {str(e)}"}), 500
+
+# --- Health Check Route ---
+@app.route('/health', methods=['GET'])
+def health_check():
+    return jsonify({
+        "status": "healthy",
+        "message": "Moktashif Backend API is running",
+        "timestamp": datetime.utcnow().isoformat() + "Z"
+    }), 200
+
 if __name__ == '__main__':
     import sys
     import time
@@ -1911,9 +2000,9 @@ if __name__ == '__main__':
     if not debug_mode:
         print("\n=== Starting Flask app in production mode (faster startup, no auto-reload) ===")
         start_time = time.time()
-        app.run(debug=False)
+        app.run(host='0.0.0.0', port=5000, debug=False)
         print(f"\n=== Application started in {time.time() - start_time:.2f} seconds ===\n")
     else:
         print("\n=== Starting Flask app in debug mode (slower startup, auto-reload enabled) ===")
         print("=== For faster startup, use: python chat.py --no-debug ===\n")
-        app.run(debug=True)
+        app.run(host='0.0.0.0', port=5000, debug=True)
